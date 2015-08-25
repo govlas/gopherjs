@@ -69,15 +69,15 @@ func NewImportContext(importFunc func(string) (*Archive, error)) *ImportContext 
 // packageImporter implements go/types.Importer interface.
 type packageImporter struct {
 	importContext *ImportContext
+	importError   *error // A pointer to importError in Compile.
 }
 
 func (pi packageImporter) Import(path string) (*types.Package, error) {
 	if _, err := pi.importContext.Import(path); err != nil {
-		// TODO: Figure out if setting importError here is still needed; if so, preserve this behavior.
-		//       It's needed to resolve https://github.com/gopherjs/gopherjs/issues/119.
-		/*if importError == nil {
-			importError = err
-		}*/
+		if *pi.importError == nil {
+			// If import failed, show first error of import only (https://github.com/gopherjs/gopherjs/issues/119).
+			*pi.importError = err
+		}
 		return nil, err
 	}
 	return pi.importContext.Packages[path], nil
@@ -97,8 +97,11 @@ func Compile(importPath string, files []*ast.File, fileSet *token.FileSet, impor
 	var errList ErrorList
 	var previousErr error
 	config := &types.Config{
-		Importer: packageImporter{importContext: importContext},
-		Sizes:    sizes32,
+		Importer: packageImporter{
+			importContext: importContext,
+			importError:   &importError,
+		},
+		Sizes: sizes32,
 		Error: func(err error) {
 			if previousErr != nil && previousErr.Error() == err.Error() {
 				return
