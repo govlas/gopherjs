@@ -79,7 +79,7 @@ func (o *Object) Interface() interface{} { return o.object.Interface() }
 // Unsafe returns the object as an uintptr, which can be converted via unsafe.Pointer. Not intended for public use.
 func (o *Object) Unsafe() uintptr { return o.object.Unsafe() }
 
-// Error encapsulates JavaScript errors. Those are turned into a Go panic and may be rescued, giving an *Error that holds the JavaScript error object.
+// Error encapsulates JavaScript errors. Those are turned into a Go panic and may be recovered, giving an *Error that holds the JavaScript error object.
 type Error struct {
 	*Object
 }
@@ -133,6 +133,7 @@ func Keys(o *Object) []string {
 func MakeWrapper(i interface{}) *Object {
 	v := InternalObject(i)
 	o := Global.Get("Object").New()
+	o.Set("__internal_object__", v)
 	methods := v.Get("constructor").Get("methods")
 	for i := 0; i < methods.Length(); i++ {
 		m := methods.Index(i)

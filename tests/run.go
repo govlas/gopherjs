@@ -44,41 +44,18 @@ import (
 // TODO: Reduce these to zero or as close as possible.
 //
 var knownFails = map[string]failReason{
-	// GopherJS compiler panics.
-	"fixedbugs/issue5793.go": {category: compilerPanic, desc: `
-panic: runtime error: index out of range
-
-goroutine 1 [running]:
-github.com/gopherjs/gopherjs/compiler.(*funcContext).translateBuiltin(0xc820160420, 0x6331c0, 0x7, 0xc8201344e0, 0x1, 0x1, 0xc820135900, 0xe04788, 0x908820, 0xc820135910)
-	github.com/gopherjs/gopherjs/compiler/expressions.go:882 +0x41c7
-`},
-	"fixedbugs/issue9691.go": {category: compilerPanic, desc: `
-panic: Unhandled lhs type: *types.Map
-
-goroutine 1 [running]:
-github.com/gopherjs/gopherjs/compiler.(*funcContext).translateAssign(0xc820160210, 0xe00488, 0xc820105050, 0x632508, 0x2, 0xcb46b0, 0x908660, 0x0, 0x0, 0x0)
-	github.com/gopherjs/gopherjs/compiler/statements.go:785 +0x1931
-`},
-
-	"fixedbugs/bug243.go":    {desc: "TypeError: undefined is not a function"},
-	"fixedbugs/issue4495.go": {desc: "TypeError: Cannot read property 'm' of undefined"},
-
-	"fixedbugs/bug114.go": {desc: "fixedbugs/bug114.go:15:27: B32 (untyped int constant 4294967295) overflows int"},
-	"fixedbugs/bug242.go": {desc: "bad map check 13 false false Error: fail"},
-	"fixedbugs/bug260.go": {desc: "maybe unsupportedFeature, pointer arithm"},
-	"fixedbugs/bug262.go": {desc: "Error: fail"},
-	"fixedbugs/bug273.go": {desc: "BUG: didn't crash:  badcap1"},
-	"fixedbugs/bug328.go": {desc: "incorrect output"},
-	"fixedbugs/bug347.go": {desc: "BUG: bug347: cannot find caller"},
-	"fixedbugs/bug348.go": {desc: "BUG: bug348: cannot find caller"},
-	"fixedbugs/bug352.go": {desc: "BUG: bug352 struct{}"},
-	"fixedbugs/bug356.go": {desc: "BUG bug344 0"},
-	"fixedbugs/bug409.go": {desc: "1 2 3 4"},
-	"fixedbugs/bug433.go": {desc: "Error: [object Object]"},
-	"fixedbugs/bug461.go": {desc: `SyntaxError: Unexpected token .
-	var $pkg = {}, $init, reflect, structType, $pkg.T$ptr, main;
-	                                               ^`},
-	"fixedbugs/bug491.go":     {desc: "BUG: append call not ordered: 3 2 3"},
+	"fixedbugs/bug114.go":     {desc: "fixedbugs/bug114.go:15:27: B32 (untyped int constant 4294967295) overflows int"},
+	"fixedbugs/bug242.go":     {desc: "bad map check 13 false false Error: fail"},
+	"fixedbugs/bug260.go":     {desc: "maybe unsupportedFeature, pointer arithm"},
+	"fixedbugs/bug262.go":     {desc: "Error: fail"},
+	"fixedbugs/bug273.go":     {desc: "BUG: didn't crash:  badcap1"},
+	"fixedbugs/bug328.go":     {desc: "incorrect output"},
+	"fixedbugs/bug347.go":     {desc: "BUG: bug347: cannot find caller"},
+	"fixedbugs/bug348.go":     {desc: "BUG: bug348: cannot find caller"},
+	"fixedbugs/bug352.go":     {desc: "BUG: bug352 struct{}"},
+	"fixedbugs/bug356.go":     {desc: "BUG bug344 0"},
+	"fixedbugs/bug409.go":     {desc: "1 2 3 4"},
+	"fixedbugs/bug433.go":     {desc: "Error: [object Object]"},
 	"fixedbugs/issue10353.go": {desc: "incorrect output"},
 	"fixedbugs/issue11256.go": {desc: "null"},
 	"fixedbugs/issue11656.go": {desc: "Error: Native function not implemented: runtime/debug.setPanicOnFault"},
@@ -772,7 +749,7 @@ func (t *test) run() {
 	case "run":
 		useTmp = false
 		// GOPHERJS.
-		out, err := runcmd(append([]string{"gopherjs", "run", t.goFileName()}, args...)...)
+		out, err := runcmd(append([]string{"gopherjs", "run", "-q", t.goFileName()}, args...)...)
 		if err != nil {
 			t.err = err
 			return

@@ -432,3 +432,61 @@ func TestEmptySelectCase(t *testing.T) {
 		t.Fail()
 	}
 }
+
+var a int
+var b int
+var C int
+var D int
+
+var a1 = &a
+var a2 = &a
+var b1 = &b
+var C1 = &C
+var C2 = &C
+var D1 = &D
+
+func TestPkgVarPointers(t *testing.T) {
+	if a1 != a2 || a1 == b1 || C1 != C2 || C1 == D1 {
+		t.Fail()
+	}
+}
+
+func TestStringMap(t *testing.T) {
+	m := make(map[string]interface{})
+	if m["__proto__"] != nil {
+		t.Fail()
+	}
+	m["__proto__"] = 42
+	if m["__proto__"] != 42 {
+		t.Fail()
+	}
+}
+
+type Int int
+
+func (i Int) Value() int {
+	return int(i)
+}
+
+func (i *Int) ValueByPtr() int {
+	return int(*i)
+}
+
+func TestWrappedTypeMethod(t *testing.T) {
+	i := Int(42)
+	p := &i
+	if p.Value() != 42 {
+		t.Fail()
+	}
+}
+
+type EmbeddedInt struct {
+	Int
+}
+
+func TestEmbeddedMethod(t *testing.T) {
+	e := EmbeddedInt{42}
+	if e.ValueByPtr() != 42 {
+		t.Fail()
+	}
+}

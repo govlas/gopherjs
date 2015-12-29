@@ -16,6 +16,8 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"text/template"
@@ -44,6 +46,11 @@ func init() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	gopaths := filepath.SplitList(build.Default.GOPATH)
+	if len(gopaths) == 0 {
+		fmt.Fprintf(os.Stderr, "$GOPATH not set. For more details see: go help gopath\n")
+		os.Exit(1)
+	}
 }
 
 func main() {
@@ -52,6 +59,8 @@ func main() {
 
 	pflag.BoolVarP(&options.Verbose, "verbose", "v", false, "print the names of packages as they are compiled")
 	flagVerbose := pflag.Lookup("verbose")
+	pflag.BoolVarP(&options.Quiet, "quiet", "q", false, "suppress non-fatal warnings")
+	flagQuiet := pflag.Lookup("quiet")
 	pflag.BoolVarP(&options.Watch, "watch", "w", false, "watch for changes to the source files")
 	flagWatch := pflag.Lookup("watch")
 	pflag.BoolVarP(&options.Minify, "minify", "m", false, "minify generated code")
@@ -67,6 +76,7 @@ func main() {
 	}
 	cmdBuild.Flags().StringVarP(&pkgObj, "output", "o", "", "output file")
 	cmdBuild.Flags().AddFlag(flagVerbose)
+	cmdBuild.Flags().AddFlag(flagQuiet)
 	cmdBuild.Flags().AddFlag(flagWatch)
 	cmdBuild.Flags().AddFlag(flagMinify)
 	cmdBuild.Flags().AddFlag(flagColor)
@@ -110,11 +120,10 @@ func main() {
 					if s.Watcher != nil {
 						s.Watcher.Add(pkgPath)
 					}
-					buildPkg, err := gbuild.Import(pkgPath, 0, s.InstallSuffix(), options.BuildTags)
+					pkg, err := gbuild.Import(pkgPath, 0, s.InstallSuffix(), options.BuildTags)
 					if err != nil {
 						return err
 					}
-					pkg := &gbuild.PackageData{Package: buildPkg}
 					if err := s.BuildPackage(pkg); err != nil {
 						return err
 					}
@@ -140,6 +149,7 @@ func main() {
 		Short: "compile and install packages and dependencies",
 	}
 	cmdInstall.Flags().AddFlag(flagVerbose)
+	cmdInstall.Flags().AddFlag(flagQuiet)
 	cmdInstall.Flags().AddFlag(flagWatch)
 	cmdInstall.Flags().AddFlag(flagMinify)
 	cmdInstall.Flags().AddFlag(flagColor)
@@ -167,7 +177,7 @@ func main() {
 					pkgs = []string{pkgPath}
 				}
 				if cmd.Name() == "get" {
-					goGet := exec.Command("go", append([]string{"get", "-d"}, pkgs...)...)
+					goGet := exec.Command("go", append([]string{"get", "-d", "-tags=js"}, pkgs...)...)
 					goGet.Stdout = os.Stdout
 					goGet.Stderr = os.Stderr
 					if err := goGet.Run(); err != nil {
@@ -176,7 +186,7 @@ func main() {
 				}
 				for _, pkgPath := range pkgs {
 					pkgPath = filepath.ToSlash(pkgPath)
-					if _, err := s.ImportPackage(pkgPath); err != nil {
+					if _, err := s.BuildImportPath(pkgPath); err != nil {
 						return err
 					}
 					pkg := s.Packages[pkgPath]
@@ -199,6 +209,7 @@ func main() {
 		Short: "download and install packages and dependencies",
 	}
 	cmdGet.Flags().AddFlag(flagVerbose)
+	cmdGet.Flags().AddFlag(flagQuiet)
 	cmdGet.Flags().AddFlag(flagWatch)
 	cmdGet.Flags().AddFlag(flagMinify)
 	cmdGet.Flags().AddFlag(flagColor)
@@ -235,7 +246,7 @@ func main() {
 			if err := s.BuildFiles(args[:lastSourceArg], tempfile.Name(), currentDirectory); err != nil {
 				return err
 			}
-			if err := runNode(tempfile.Name(), args[lastSourceArg:], ""); err != nil {
+			if err := runNode(tempfile.Name(), args[lastSourceArg:], "", options.Quiet); err != nil {
 				return err
 			}
 			return nil
@@ -254,7 +265,7 @@ func main() {
 	cmdTest.Flags().AddFlag(flagColor)
 	cmdTest.Run = func(cmd *cobra.Command, args []string) {
 		os.Exit(handleError(func() error {
-			pkgs := make([]*build.Package, len(args))
+			pkgs := make([]*gbuild.PackageData, len(args))
 			for i, pkgPath := range args {
 				pkgPath = filepath.ToSlash(pkgPath)
 				var err error
@@ -269,7 +280,7 @@ func main() {
 				if err != nil {
 					return err
 				}
-				var pkg *build.Package
+				var pkg *gbuild.PackageData
 				if strings.HasPrefix(currentDirectory, srcDir) {
 					pkgPath, err := filepath.Rel(srcDir, currentDirectory)
 					if err != nil {
@@ -280,12 +291,12 @@ func main() {
 					}
 				}
 				if pkg == nil {
-					if pkg, err = build.ImportDir(currentDirectory, 0); err != nil {
+					if pkg, err = gbuild.ImportDir(currentDirectory, 0); err != nil {
 						return err
 					}
 					pkg.ImportPath = "_" + currentDirectory
 				}
-				pkgs = []*build.Package{pkg}
+				pkgs = []*gbuild.PackageData{pkg}
 			}
 
 			var exitErr error
@@ -296,9 +307,8 @@ func main() {
 				}
 
 				s := gbuild.NewSession(options)
-				tests := &testFuncs{Package: pkg}
-				collectTests := func(buildPkg *build.Package, testPkgName string, needVar *bool) error {
-					testPkg := &gbuild.PackageData{Package: buildPkg, IsTest: true}
+				tests := &testFuncs{Package: pkg.Package}
+				collectTests := func(testPkg *gbuild.PackageData, testPkgName string, needVar *bool) error {
 					if err := s.BuildPackage(testPkg); err != nil {
 						return err
 					}
@@ -316,20 +326,27 @@ func main() {
 					return nil
 				}
 
-				if err := collectTests(&build.Package{
-					ImportPath: pkg.ImportPath,
-					Dir:        pkg.Dir,
-					GoFiles:    append(pkg.GoFiles, pkg.TestGoFiles...),
-					Imports:    append(pkg.Imports, pkg.TestImports...),
+				if err := collectTests(&gbuild.PackageData{
+					Package: &build.Package{
+						ImportPath: pkg.ImportPath,
+						Dir:        pkg.Dir,
+						GoFiles:    append(pkg.GoFiles, pkg.TestGoFiles...),
+						Imports:    append(pkg.Imports, pkg.TestImports...),
+					},
+					IsTest:  true,
+					JSFiles: pkg.JSFiles,
 				}, "_test", &tests.NeedTest); err != nil {
 					return err
 				}
 
-				if err := collectTests(&build.Package{
-					ImportPath: pkg.ImportPath + "_test",
-					Dir:        pkg.Dir,
-					GoFiles:    pkg.XTestGoFiles,
-					Imports:    pkg.XTestImports,
+				if err := collectTests(&gbuild.PackageData{
+					Package: &build.Package{
+						ImportPath: pkg.ImportPath + "_test",
+						Dir:        pkg.Dir,
+						GoFiles:    pkg.XTestGoFiles,
+						Imports:    pkg.XTestImports,
+					},
+					IsTest: true,
 				}, "_xtest", &tests.NeedXtest); err != nil {
 					return err
 				}
@@ -385,7 +402,7 @@ func main() {
 				}
 				status := "ok  "
 				start := time.Now()
-				if err := runNode(tempfile.Name(), args, pkg.Dir); err != nil {
+				if err := runNode(tempfile.Name(), args, pkg.Dir, options.Quiet); err != nil {
 					if _, ok := err.(*exec.ExitError); !ok {
 						return err
 					}
@@ -431,6 +448,7 @@ func main() {
 		Short: "compile on-the-fly and serve",
 	}
 	cmdServe.Flags().AddFlag(flagVerbose)
+	cmdServe.Flags().AddFlag(flagQuiet)
 	cmdServe.Flags().AddFlag(flagMinify)
 	cmdServe.Flags().AddFlag(flagColor)
 	cmdServe.Flags().AddFlag(flagTags)
@@ -496,8 +514,8 @@ func (fs serveCommandFileSystem) Open(name string) (http.File, error) {
 	if isPkg || isMap || isIndex {
 		// If we're going to be serving our special files, make sure there's a Go command in this folder.
 		s := gbuild.NewSession(fs.options)
-		buildPkg, err := gbuild.Import(path.Dir(name[1:]), 0, s.InstallSuffix(), fs.options.BuildTags)
-		if err != nil || buildPkg.Name != "main" {
+		pkg, err := gbuild.Import(path.Dir(name[1:]), 0, s.InstallSuffix(), fs.options.BuildTags)
+		if err != nil || pkg.Name != "main" {
 			isPkg = false
 			isMap = false
 			isIndex = false
@@ -508,7 +526,6 @@ func (fs serveCommandFileSystem) Open(name string) (http.File, error) {
 			buf := bytes.NewBuffer(nil)
 			browserErrors := bytes.NewBuffer(nil)
 			exitCode := handleError(func() error {
-				pkg := &gbuild.PackageData{Package: buildPkg}
 				if err := s.BuildPackage(pkg); err != nil {
 					return err
 				}
@@ -652,8 +669,25 @@ func printError(err error, options *gbuild.Options, browserErrors *bytes.Buffer)
 	}
 }
 
-func runNode(script string, args []string, dir string) error {
-	node := exec.Command("node", append([]string{"--stack_size=10000", script}, args...)...)
+func runNode(script string, args []string, dir string, quiet bool) error {
+	var allArgs []string
+	if b, _ := strconv.ParseBool(os.Getenv("SOURCE_MAP_SUPPORT")); os.Getenv("SOURCE_MAP_SUPPORT") == "" || b {
+		allArgs = []string{"--require", "source-map-support/register"}
+		if err := exec.Command("node", "--require", "source-map-support/register", "--eval", "").Run(); err != nil {
+			if !quiet {
+				fmt.Fprintln(os.Stderr, "gopherjs: Source maps disabled. Use Node.js 4.x with source-map-support module for nice stack traces.")
+			}
+			allArgs = []string{}
+		}
+	}
+
+	if runtime.GOOS != "windows" {
+		allArgs = append(allArgs, "--stack_size=10000", script)
+	}
+
+	allArgs = append(allArgs, args...)
+
+	node := exec.Command("node", allArgs...)
 	node.Dir = dir
 	node.Stdin = os.Stdin
 	node.Stdout = os.Stdout

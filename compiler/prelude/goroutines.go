@@ -46,6 +46,8 @@ var $callDeferred = function(deferred, jsErr, fromPanic) {
       if (deferred === null) {
         deferred = $curGoroutine.deferStack[$curGoroutine.deferStack.length - 1];
         if (deferred === undefined) {
+          /* The panic reached the top of the stack. Clear it and throw it as a JavaScript error. */
+          $panicStackDepth = null;
           if (localPanicValue.Object instanceof Error) {
             throw localPanicValue.Object;
           }
@@ -215,7 +217,7 @@ var $send = function(chan, value) {
       if (chan.$closed) {
         $throwRuntimeError("send on closed channel");
       }
-    },
+    }
   };
 };
 var $recv = function(chan) {
@@ -228,7 +230,7 @@ var $recv = function(chan) {
     return [bufferedValue, true];
   }
   if (chan.$closed) {
-    return [chan.constructor.elem.zero(), false];
+    return [chan.$elem.zero(), false];
   }
 
   var thisGoroutine = $curGoroutine;
@@ -258,7 +260,7 @@ var $close = function(chan) {
     if (queuedRecv === undefined) {
       break;
     }
-    queuedRecv([chan.constructor.elem.zero(), false]);
+    queuedRecv([chan.$elem.zero(), false]);
   }
 };
 var $select = function(comms) {

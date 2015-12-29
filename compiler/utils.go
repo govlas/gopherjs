@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/gopherjs/gopherjs/compiler/analysis"
 	"github.com/gopherjs/gopherjs/compiler/typesutil"
 
+	"golang.org/x/tools/go/exact"
 	"golang.org/x/tools/go/types"
 )
 
@@ -75,7 +77,7 @@ func (c *funcContext) Delayed(f func()) {
 
 func (c *funcContext) translateArgs(sig *types.Signature, argExprs []ast.Expr, ellipsis, clone bool) []string {
 	if len(argExprs) == 1 {
-		if tuple, isTuple := c.p.Types[argExprs[0]].Type.(*types.Tuple); isTuple {
+		if tuple, isTuple := c.p.TypeOf(argExprs[0]).(*types.Tuple); isTuple {
 			tupleVar := c.newVariable("_tuple")
 			c.Printf("%s = %s;", tupleVar, c.translateExpr(argExprs[0]))
 			argExprs = make([]ast.Expr, tuple.Len())
@@ -164,40 +166,41 @@ func (c *funcContext) translateSelection(sel *types.Selection, pos token.Pos) ([
 	return fields, ""
 }
 
-func (c *funcContext) zeroValue(ty types.Type) string {
-	if typesutil.IsJsObject(ty) {
-		return "null"
-	}
+var nilObj = types.Universe.Lookup("nil")
+
+func (c *funcContext) zeroValue(ty types.Type) ast.Expr {
 	switch t := ty.Underlying().(type) {
 	case *types.Basic:
 		switch {
-		case is64Bit(t) || isComplex(t):
-			return fmt.Sprintf("new %s(0, 0)", c.typeName(ty))
 		case isBoolean(t):
-			return "false"
-		case isNumeric(t), t.Kind() == types.UnsafePointer:
-			return "0"
+			return c.newConst(ty, exact.MakeBool(false))
+		case isNumeric(t):
+			return c.newConst(ty, exact.MakeInt64(0))
 		case isString(t):
-			return `""`
+			return c.newConst(ty, exact.MakeString(""))
+		case t.Kind() == types.UnsafePointer:
+			// fall through to "nil"
 		case t.Kind() == types.UntypedNil:
 			panic("Zero value for untyped nil.")
 		default:
-			panic("Unhandled type")
+			panic(fmt.Sprintf("Unhandled basic type: %v\n", t))
 		}
-	case *types.Array:
-		return fmt.Sprintf("%s.zero()", c.typeName(ty))
-	case *types.Signature:
-		return "$throwNilPointerError"
-	case *types.Slice:
-		return fmt.Sprintf("%s.nil", c.typeName(ty))
-	case *types.Struct:
-		return fmt.Sprintf("new %s.ptr()", c.typeName(ty))
-	case *types.Map:
-		return "false"
-	case *types.Interface:
-		return "$ifaceNil"
+	case *types.Array, *types.Struct:
+		return c.setType(&ast.CompositeLit{}, ty)
+	case *types.Chan, *types.Interface, *types.Map, *types.Signature, *types.Slice, *types.Pointer:
+		// fall through to "nil"
+	default:
+		panic(fmt.Sprintf("Unhandled type: %T\n", t))
 	}
-	return fmt.Sprintf("%s.nil", c.typeName(ty))
+	id := c.newIdent("nil", ty)
+	c.p.Uses[id] = nilObj
+	return id
+}
+
+func (c *funcContext) newConst(t types.Type, value exact.Value) ast.Expr {
+	id := &ast.Ident{}
+	c.p.Types[id] = types.TypeAndValue{Type: t, Value: value}
+	return id
 }
 
 func (c *funcContext) newVariable(name string) string {
@@ -208,12 +211,7 @@ func (c *funcContext) newVariableWithLevel(name string, pkgLevel bool) string {
 	if name == "" {
 		panic("newVariable: empty name")
 	}
-	for _, b := range []byte(name) {
-		if (b < '0' || b > 'z') && b != '$' {
-			name = "nonAsciiName"
-			break
-		}
-	}
+	name = encodeIdent(name)
 	if c.p.minify {
 		i := 0
 		for {
@@ -482,7 +480,7 @@ func isWrapped(ty types.Type) bool {
 	switch t := ty.Underlying().(type) {
 	case *types.Basic:
 		return !is64Bit(t) && !isComplex(t) && t.Kind() != types.UntypedNil
-	case *types.Array, *types.Map, *types.Signature:
+	case *types.Array, *types.Chan, *types.Map, *types.Signature:
 		return true
 	case *types.Pointer:
 		_, isArray := t.Elem().Underlying().(*types.Array)
@@ -631,4 +629,17 @@ func rangeCheck(pattern string, constantIndex, array bool) string {
 		check = "(%2f < 0 || " + check + ")"
 	}
 	return "(" + check + ` ? $throwRuntimeError("index out of range") : ` + pattern + ")"
+}
+
+func endsWithReturn(stmts []ast.Stmt) bool {
+	if len(stmts) > 0 {
+		if _, ok := stmts[len(stmts)-1].(*ast.ReturnStmt); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func encodeIdent(name string) string {
+	return strings.Replace(url.QueryEscape(name), "%", "$", -1)
 }

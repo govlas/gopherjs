@@ -254,12 +254,12 @@ func Compile(importPath string, files []*ast.File, fileSet *token.FileSet, impor
 		if !o.Exported() {
 			d.Vars = []string{c.objectName(o)}
 		}
-		if c.p.HasPointer[o] {
+		if c.p.HasPointer[o] && !o.Exported() {
 			d.Vars = append(d.Vars, c.varPtrName(o))
 		}
 		if _, ok := varsWithInit[o]; !ok {
 			d.DceDeps = collectDependencies(func() {
-				d.InitCode = []byte(fmt.Sprintf("\t\t%s = %s;\n", c.objectName(o), c.zeroValue(o.Type())))
+				d.InitCode = []byte(fmt.Sprintf("\t\t%s = %s;\n", c.objectName(o), c.translateExpr(c.zeroValue(o.Type())).String()))
 			})
 		}
 		d.DceObjectFilter = o.Name()
@@ -380,7 +380,7 @@ func Compile(importPath string, files []*ast.File, fileSet *token.FileSet, impor
 				typeName := c.objectName(o)
 				lhs := typeName
 				if isPkgLevel(o) {
-					lhs += " = $pkg." + o.Name()
+					lhs += " = $pkg." + encodeIdent(o.Name())
 				}
 				size := int64(0)
 				constructor := "null"
@@ -392,7 +392,7 @@ func Compile(importPath string, files []*ast.File, fileSet *token.FileSet, impor
 					}
 					constructor = fmt.Sprintf("function(%s) {\n\t\tthis.$val = this;\n\t\tif (arguments.length === 0) {\n", strings.Join(params, ", "))
 					for i := 0; i < t.NumFields(); i++ {
-						constructor += fmt.Sprintf("\t\t\tthis.%s = %s;\n", fieldName(t, i), c.zeroValue(t.Field(i).Type()))
+						constructor += fmt.Sprintf("\t\t\tthis.%s = %s;\n", fieldName(t, i), c.translateExpr(c.zeroValue(t.Field(i).Type())).String())
 					}
 					constructor += "\t\t\treturn;\n\t\t}\n"
 					for i := 0; i < t.NumFields(); i++ {
@@ -570,7 +570,7 @@ func (c *funcContext) translateToplevelFunction(fun *ast.FuncDecl, info *analysi
 		funcRef := c.objectName(o)
 		code.Write(primaryFunction(funcRef))
 		if fun.Name.IsExported() {
-			fmt.Fprintf(code, "\t$pkg.%s = %s;\n", fun.Name.Name, funcRef)
+			fmt.Fprintf(code, "\t$pkg.%s = %s;\n", encodeIdent(fun.Name.Name), funcRef)
 		}
 		return code.Bytes()
 	}
@@ -668,7 +668,7 @@ func translateFunction(typ *ast.FuncType, initStmts []ast.Stmt, body *ast.BlockS
 			c.resultNames = make([]ast.Expr, c.sig.Results().Len())
 			for i := 0; i < c.sig.Results().Len(); i++ {
 				result := c.sig.Results().At(i)
-				c.Printf("%s = %s;", c.objectName(result), c.zeroValue(result.Type()))
+				c.Printf("%s = %s;", c.objectName(result), c.translateExpr(c.zeroValue(result.Type())).String())
 				id := ast.NewIdent("")
 				c.p.Uses[id] = result
 				c.resultNames[i] = c.setType(id, result.Type())
@@ -732,7 +732,10 @@ func translateFunction(typ *ast.FuncType, initStmts []ast.Stmt, body *ast.BlockS
 
 	if len(c.Flattened) != 0 {
 		prefix = prefix + " s: while (true) { switch ($s) { case 0:"
-		suffix = " $s = -1; case -1: } return; }" + suffix
+		suffix = " } return; }" + suffix
+		if !endsWithReturn(body.List) {
+			suffix = " $s = -1; case -1:" + suffix
+		}
 	}
 
 	if c.HasDefer {
